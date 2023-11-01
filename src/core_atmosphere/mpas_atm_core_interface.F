@@ -517,8 +517,9 @@ module atm_core_interface
 
       ! Local variables
       integer :: local_err
+#ifndef MPAS_CAM_DYCORE
       type (mpas_coupler_type), pointer :: mpas_cpl
-
+#endif
       iErr = 0
 
       ! Initialize log manager
@@ -532,10 +533,16 @@ module atm_core_interface
       !
       ! Make log filenames specific to the role of each MPI task
       !
+#ifdef MPAS_CAM_DYCORE      
+
+      write(logInfo % outputLog % filename, '(a,i2.2,a,i4.4,a)') 'log.atmosphere.', domain % dminfo % my_proc_id, '.out'
+      write(logInfo % errorLog % filename, '(a,i2.2,a,i4.4,a)') 'log.atmosphere.', domain % dminfo % my_proc_id, '.err'
+
+#else
       mpas_cpl => domain % mpas_cpl
       write(logInfo % outputLog % filename, '(a,i2.2,a,i4.4,a)') 'log.atmosphere.role', mpas_cpl % role(), '.', domain % dminfo % my_proc_id, '.out'
       write(logInfo % errorLog % filename, '(a,i2.2,a,i4.4,a)') 'log.atmosphere.role', mpas_cpl % role(), '.', domain % dminfo % my_proc_id, '.err'
-
+#endif
       ! After core has had a chance to modify log defaults, open the output log
       call mpas_log_open(err=local_err)
       iErr = ior(iErr, local_err)
