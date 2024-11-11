@@ -577,7 +577,6 @@ module atm_time_integration
       allocate(qtot(nVertLevels,nCells+1))
 !      qtot(:,nCells+1) = 0.0_RKIND
       allocate(tend_th(nVertLevels,nCellsSolve))
-      qtot(:,nCells+1) = 0.0_RKIND
 
 #ifndef MPAS_CAM_DYCORE
       call mpas_pool_get_field(tend_physics, 'tend_rtheta_physics', tend_rtheta_physicsField)
@@ -596,6 +595,14 @@ module atm_time_integration
 !      tend_rho_physics(:,nCells+1) = 0.0_RKIND
       call mpas_pool_get_array_gpu(tend_physics, 'tend_ru_physics', tend_ru_physics)
 !      tend_ru_physics(:,nEdges+1) = 0.0_RKIND
+!$acc kernels present(tend_rtheta_physics, tend_rho_physics, tend_ru_physics)
+      do k = 1,nVertLevels+1
+         tend_rtheta_physics(k,nCells+1) = 0.0_RKIND
+         tend_rho_physics(k,nCells+1) = 0.0_RKIND
+         tend_ru_physics(k,nEdges+1) = 0.0_RKIND
+      end do
+!$acc end kernels
+!$acc update host(tend_rtheta_physics, tend_rho_physics, tend_ru_physics)
 
       !
       ! Initialize RK weights
@@ -2079,13 +2086,15 @@ module atm_time_integration
 
       end if  ! regional_MPAS addition
 
-      call mpas_timer_start('atm_rk_summary')
-      call summarize_timestep(domain)
-      call mpas_timer_stop('atm_rk_summary')
-
+#ifdef MPAS_OPENACC
       call mpas_timer_start('mpas update GPU data on host')
       call mpas_update_gpu_data_on_host(domain)
       call mpas_timer_stop('mpas update GPU data on host')
+#endif MPAS_OPENACC
+
+      call mpas_timer_start('atm_rk_summary')
+      call summarize_timestep(domain)
+      call mpas_timer_stop('atm_rk_summary')
 
    end subroutine atm_srk3
 
@@ -2496,19 +2505,6 @@ module atm_time_integration
       real (kind=RKIND), dimension(nVertLevels,nEdges+1) :: cqu
       integer, dimension(2,nEdges+1) :: cellsOnEdge
 !$acc data present(scalars,cqw,cqu, qtot)
-
-      do iCell = edgeStart,edgeEnd
-         do k = 1,nVertLevels
-            tend_ru_physics(k,iCell) = 0.0_RKIND
-         end do
-      end do
-
-      do iCell = cellStart,cellEnd
-         do k = 1,nVertLevels
-            tend_rtheta_physics(k,iCell) = 0.0_RKIND
-            tend_rho_physics(k,iCell) = 0.0_RKIND
-         end do
-      end do
 
 !$acc parallel num_gangs(256)  vector_length(32)
 !$acc loop gang 
@@ -5376,10 +5372,8 @@ module atm_time_integration
            rthdynten(temp1,temp_nCells+1) = 0.0_RKIND
       end do
       !$acc end kernels
- 
-      if(rk_step == 1) then
 
-       call atm_compute_dyn_tend_work(nCells, nEdges, nVertices, nVertLevels, &
+      call atm_compute_dyn_tend_work(nCells, nEdges, nVertices, nVertLevels, &
          nCellsSolve, nEdgesSolve, vertexDegree, maxEdges, maxEdges2, num_scalars, moist_start, moist_end, &
          fEdge, dvEdge, dcEdge, invDcEdge, invDvEdge, invAreaCell, invAreaTriangle, meshScalingDel2, meshScalingDel4, &
          weightsOnEdge, zgrid, rho_edge, rho_zz, ru, u, v, tend_u, &
@@ -5390,7 +5384,7 @@ module atm_time_integration
          cellsOnEdge, verticesOnEdge, edgesOnCell, edgesOnEdge, cellsOnCell, edgesOnVertex, nEdgesOnCell, nEdgesOnEdge, &
          latCell, latEdge, angleEdge, u_init, v_init, advCellsForEdge, nAdvCellsForEdge, adv_coefs, adv_coefs_3rd, &
          rdzu, rdzw, fzm, fzp, qv_init, t_init, cf1, cf2, cf3, r_earth, ur_cell, vr_cell, defc_a, defc_b, &
-         tend_w_pgf, tend_w_buoy, coef_3rd_order, c_s, smdiv, config_mix_full, config_horiz_mixing, config_del4u_div_factor, &
+         tend_w_pgf, tend_w_buoy, coef_3rd_order, c_s, config_mix_full, config_horiz_mixing, config_del4u_div_factor, &
          config_h_mom_eddy_visc2, config_v_mom_eddy_visc2, config_h_theta_eddy_visc2, config_v_theta_eddy_visc2, &
          config_h_theta_eddy_visc4, config_h_mom_eddy_visc4, config_visc4_2dsmag, config_len_disp, rk_step, dt, &
          config_mpas_cam_coef, &
@@ -5398,32 +5392,51 @@ module atm_time_integration
          tend_rtheta_adv, rthdynten, &
          cellStart, cellEnd, vertexStart, vertexEnd, edgeStart, edgeEnd, &
          cellSolveStart, cellSolveEnd, vertexSolveStart, vertexSolveEnd, edgeSolveStart, edgeSolveEnd)
-		 
-	  
-	  
-	  else
 
-	        call atm_compute_dyn_tend_work_rk23(nCells, nEdges, nVertices, nVertLevels, &
-         nCellsSolve, nEdgesSolve, vertexDegree, maxEdges, maxEdges2, num_scalars, moist_start, moist_end, &
-         fEdge, dvEdge, dcEdge, invDcEdge, invDvEdge, invAreaCell, invAreaTriangle, meshScalingDel2, meshScalingDel4, &
-         weightsOnEdge, zgrid, rho_edge, rho_zz, ru, u, v, tend_u, &
-         divergence, vorticity, ke, pv_edge, theta_m, rw, tend_rho, &
-         rt_diabatic_tend, tend_theta, tend_w, w, cqw, rb, rr, pp, pressure_b, zz, zxu, cqu, & 
-         h_divergence, kdiff, edgesOnCell_sign, edgesOnVertex_sign, rw_save, ru_save, &
-         theta_m_save, exner, rr_save, scalars, tend_u_euler, tend_w_euler, tend_theta_euler, deriv_two, &
-         cellsOnEdge, verticesOnEdge, edgesOnCell, edgesOnEdge, cellsOnCell, edgesOnVertex, nEdgesOnCell, nEdgesOnEdge, &
-         latCell, latEdge, angleEdge, u_init, advCellsForEdge, nAdvCellsForEdge, adv_coefs, adv_coefs_3rd, &
-         rdzu, rdzw, fzm, fzp, qv_init, t_init, cf1, cf2, cf3, r_earth, ur_cell, vr_cell, defc_a, defc_b, &
-         tend_w_pgf, tend_w_buoy, coef_3rd_order, c_s, smdiv, config_mix_full, config_horiz_mixing, config_del4u_div_factor, &
-         config_h_mom_eddy_visc2, config_v_mom_eddy_visc2, config_h_theta_eddy_visc2, config_v_theta_eddy_visc2, &
-         config_h_theta_eddy_visc4, config_h_mom_eddy_visc4, config_visc4_2dsmag, config_len_disp, rk_step, dt, &
-         tend_rtheta_adv, rthdynten, &
-         cellStart, cellEnd, vertexStart, vertexEnd, edgeStart, edgeEnd, &
-         cellSolveStart, cellSolveEnd, vertexSolveStart, vertexSolveEnd, edgeSolveStart, edgeSolveEnd)
-	  
-	  
-	  end if 
-	  
+      ! if(rk_step == 1) then
+
+      !  call atm_compute_dyn_tend_work_rk1(nCells, nEdges, nVertices, nVertLevels, &
+      !    nCellsSolve, nEdgesSolve, vertexDegree, maxEdges, maxEdges2, num_scalars, moist_start, moist_end, &
+      !    fEdge, dvEdge, dcEdge, invDcEdge, invDvEdge, invAreaCell, invAreaTriangle, meshScalingDel2, meshScalingDel4, &
+      !    weightsOnEdge, zgrid, rho_edge, rho_zz, ru, u, v, tend_u, &
+      !    divergence, vorticity, ke, pv_edge, theta_m, rw, tend_rho, &
+      !    rt_diabatic_tend, tend_theta, tend_w, w, cqw, rb, rr, pp, pressure_b, zz, zxu, cqu, & 
+      !    h_divergence, kdiff, edgesOnCell_sign, edgesOnVertex_sign, rw_save, ru_save, &
+      !    theta_m_save, exner, rr_save, scalars, tend_u_euler, tend_w_euler, tend_theta_euler, deriv_two, &
+      !    cellsOnEdge, verticesOnEdge, edgesOnCell, edgesOnEdge, cellsOnCell, edgesOnVertex, nEdgesOnCell, nEdgesOnEdge, &
+      !    latCell, latEdge, angleEdge, u_init, v_init, advCellsForEdge, nAdvCellsForEdge, adv_coefs, adv_coefs_3rd, &
+      !    rdzu, rdzw, fzm, fzp, qv_init, t_init, cf1, cf2, cf3, r_earth, ur_cell, vr_cell, defc_a, defc_b, &
+      !    tend_w_pgf, tend_w_buoy, coef_3rd_order, c_s, smdiv, config_mix_full, config_horiz_mixing, config_del4u_div_factor, &
+      !    config_h_mom_eddy_visc2, config_v_mom_eddy_visc2, config_h_theta_eddy_visc2, config_v_theta_eddy_visc2, &
+      !    config_h_theta_eddy_visc4, config_h_mom_eddy_visc4, config_visc4_2dsmag, config_len_disp, rk_step, dt, &
+      !    config_mpas_cam_coef, &
+      !    config_rayleigh_damp_u, config_rayleigh_damp_u_timescale_days, config_number_rayleigh_damp_u_levels, &
+      !    tend_rtheta_adv, rthdynten, &
+      !    cellStart, cellEnd, vertexStart, vertexEnd, edgeStart, edgeEnd, &
+      !    cellSolveStart, cellSolveEnd, vertexSolveStart, vertexSolveEnd, edgeSolveStart, edgeSolveEnd)
+
+      ! else
+
+      !  call atm_compute_dyn_tend_work_rk23(nCells, nEdges, nVertices, nVertLevels, &
+      !    nCellsSolve, nEdgesSolve, vertexDegree, maxEdges, maxEdges2, num_scalars, moist_start, moist_end, &
+      !    fEdge, dvEdge, dcEdge, invDcEdge, invDvEdge, invAreaCell, invAreaTriangle, meshScalingDel2, meshScalingDel4, &
+      !    weightsOnEdge, zgrid, rho_edge, rho_zz, ru, u, v, tend_u, &
+      !    divergence, vorticity, ke, pv_edge, theta_m, rw, tend_rho, &
+      !    rt_diabatic_tend, tend_theta, tend_w, w, cqw, rb, rr, pp, pressure_b, zz, zxu, cqu, & 
+      !    h_divergence, kdiff, edgesOnCell_sign, edgesOnVertex_sign, rw_save, ru_save, &
+      !    theta_m_save, exner, rr_save, scalars, tend_u_euler, tend_w_euler, tend_theta_euler, deriv_two, &
+      !    cellsOnEdge, verticesOnEdge, edgesOnCell, edgesOnEdge, cellsOnCell, edgesOnVertex, nEdgesOnCell, nEdgesOnEdge, &
+      !    latCell, latEdge, angleEdge, u_init, advCellsForEdge, nAdvCellsForEdge, adv_coefs, adv_coefs_3rd, &
+      !    rdzu, rdzw, fzm, fzp, qv_init, t_init, cf1, cf2, cf3, r_earth, ur_cell, vr_cell, defc_a, defc_b, &
+      !    tend_w_pgf, tend_w_buoy, coef_3rd_order, c_s, smdiv, config_mix_full, config_horiz_mixing, config_del4u_div_factor, &
+      !    config_h_mom_eddy_visc2, config_v_mom_eddy_visc2, config_h_theta_eddy_visc2, config_v_theta_eddy_visc2, &
+      !    config_h_theta_eddy_visc4, config_h_mom_eddy_visc4, config_visc4_2dsmag, config_len_disp, rk_step, dt, &
+      !    tend_rtheta_adv, rthdynten, &
+      !    cellStart, cellEnd, vertexStart, vertexEnd, edgeStart, edgeEnd, &
+      !    cellSolveStart, cellSolveEnd, vertexSolveStart, vertexSolveEnd, edgeSolveStart, edgeSolveEnd)
+
+      ! end if
+
       !$acc end data
       if (inactive_rthdynten) then
          deallocate(rthdynten)
@@ -5432,8 +5445,1158 @@ module atm_time_integration
    end subroutine atm_compute_dyn_tend
 
 
-
    subroutine atm_compute_dyn_tend_work(nCells, nEdges, nVertices, nVertLevels_dummy, &
+      nCellsSolve, nEdgesSolve, vertexDegree, maxEdges_dummy, maxEdges2_dummy, num_scalars_dummy, moist_start, moist_end, &
+      fEdge, dvEdge, dcEdge, invDcEdge, invDvEdge, invAreaCell, invAreaTriangle, meshScalingDel2, meshScalingDel4, &
+      weightsOnEdge, zgrid, rho_edge, rho_zz, ru, u, v, tend_u, &
+      divergence, vorticity, ke, pv_edge, theta_m, rw, tend_rho, &
+      rt_diabatic_tend, tend_theta, tend_w, w, cqw, rb, rr, pp, pressure_b, zz, zxu, cqu, &
+      h_divergence, kdiff, edgesOnCell_sign, edgesOnVertex_sign, rw_save, ru_save, &
+      theta_m_save, exner, rr_save, scalars, tend_u_euler, tend_w_euler, tend_theta_euler, deriv_two, &
+      cellsOnEdge, verticesOnEdge, edgesOnCell, edgesOnEdge, cellsOnCell, edgesOnVertex, nEdgesOnCell, nEdgesOnEdge, &
+      latCell, latEdge, angleEdge, u_init, v_init, advCellsForEdge, nAdvCellsForEdge, adv_coefs, adv_coefs_3rd, &
+      rdzu, rdzw, fzm, fzp, qv_init, t_init, cf1, cf2, cf3, r_earth, ur_cell, vr_cell, defc_a, defc_b, &
+      tend_w_pgf, tend_w_buoy, coef_3rd_order, c_s, config_mix_full, config_horiz_mixing, config_del4u_div_factor, &
+      config_h_mom_eddy_visc2, config_v_mom_eddy_visc2, config_h_theta_eddy_visc2, config_v_theta_eddy_visc2, &
+      config_h_theta_eddy_visc4, config_h_mom_eddy_visc4, config_visc4_2dsmag, config_len_disp, rk_step, dt, &
+      config_mpas_cam_coef, &
+      config_rayleigh_damp_u, config_rayleigh_damp_u_timescale_days, config_number_rayleigh_damp_u_levels, &
+      tend_rtheta_adv, rthdynten, &
+      cellStart, cellEnd, vertexStart, vertexEnd, edgeStart, edgeEnd, &
+      cellSolveStart, cellSolveEnd, vertexSolveStart, vertexSolveEnd, edgeSolveStart, edgeSolveEnd)
+
+
+      use mpas_atm_dimensions
+
+
+      implicit none
+
+
+      !
+      ! Dummy arguments
+      !
+      integer :: nCells, nEdges, nVertices, nVertLevels_dummy, nCellsSolve, nEdgesSolve, vertexDegree, &
+                 maxEdges_dummy, maxEdges2_dummy, num_scalars_dummy, moist_start, moist_end
+
+      real (kind=RKIND), dimension(nEdges+1) :: fEdge
+      real (kind=RKIND), dimension(nEdges+1) :: dvEdge
+      real (kind=RKIND), dimension(nEdges+1) :: dcEdge
+      real (kind=RKIND), dimension(nEdges+1) :: invDcEdge
+      real (kind=RKIND), dimension(nEdges+1) :: invDvEdge
+      real (kind=RKIND), dimension(nCells+1) :: invAreaCell
+      real (kind=RKIND), dimension(nVertices+1) :: invAreaTriangle
+      real (kind=RKIND), dimension(nEdges+1) :: meshScalingDel2
+      real (kind=RKIND), dimension(nEdges+1) :: meshScalingDel4
+      real (kind=RKIND), dimension(maxEdges2,nEdges+1) :: weightsOnEdge
+      real (kind=RKIND), dimension(nVertLevels+1,nCells+1) :: zgrid
+      real (kind=RKIND), dimension(nVertLevels,nEdges+1) :: rho_edge
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: rho_zz
+      real (kind=RKIND), dimension(nVertLevels,nEdges+1) :: ru
+      real (kind=RKIND), dimension(nVertLevels,nEdges+1) :: u
+      real (kind=RKIND), dimension(nVertLevels,nEdges+1) :: v
+      real (kind=RKIND), dimension(nVertLevels,nEdges+1) :: tend_u
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: divergence
+      real (kind=RKIND), dimension(nVertLevels,nVertices+1) :: vorticity
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: ke
+      real (kind=RKIND), dimension(nVertLevels,nEdges+1) :: pv_edge
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: theta_m
+      real (kind=RKIND), dimension(nVertLevels+1,nCells+1) :: rw
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: tend_rho
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: rt_diabatic_tend
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: tend_theta
+      real (kind=RKIND), dimension(nVertLevels+1,nCells+1) :: tend_w
+      real (kind=RKIND), dimension(nVertLevels+1,nCells+1) :: w
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: cqw
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: rb
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: rr
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: pp
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: pressure_b
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: zz
+      real (kind=RKIND), dimension(nVertLevels,nEdges+1) :: zxu
+      real (kind=RKIND), dimension(nVertLevels,nEdges+1) :: cqu
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: h_divergence
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: kdiff
+      real (kind=RKIND), dimension(maxEdges,nCells+1) :: edgesOnCell_sign
+      real (kind=RKIND), dimension(vertexDegree,nVertices+1) :: edgesOnVertex_sign
+      real (kind=RKIND), dimension(nVertLevels+1,nCells+1) :: rw_save
+      real (kind=RKIND), dimension(nVertLevels,nEdges+1) :: ru_save
+
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: theta_m_save
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: exner
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: rr_save
+      real (kind=RKIND), dimension(num_scalars,nVertLevels,nCells+1) :: scalars
+      real (kind=RKIND), dimension(nVertLevels,nEdges+1) :: tend_u_euler
+      real (kind=RKIND), dimension(nVertLevels+1,nCells+1) :: tend_w_euler
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: tend_theta_euler
+      real (kind=RKIND), dimension(15,2,nEdges+1) :: deriv_two
+      integer, dimension(2,nEdges+1) :: cellsOnEdge
+      integer, dimension(2,nEdges+1) :: verticesOnEdge
+      integer, dimension(maxEdges,nCells+1) :: edgesOnCell
+      integer, dimension(maxEdges2,nEdges+1) :: edgesOnEdge
+      integer, dimension(maxEdges,nCells+1) :: cellsOnCell
+      integer, dimension(vertexDegree,nVertices+1) :: edgesOnVertex
+      integer, dimension(nCells+1) :: nEdgesOnCell
+      integer, dimension(nEdges+1) :: nEdgesOnEdge
+      real (kind=RKIND), dimension(nCells+1) :: latCell
+      real (kind=RKIND), dimension(nEdges+1) :: latEdge
+      real (kind=RKIND), dimension(nEdges+1) :: angleEdge
+      real (kind=RKIND), dimension(nVertLevels) :: u_init, v_init
+
+      integer, dimension(15,nEdges+1) :: advCellsForEdge
+      integer, dimension(nEdges+1) :: nAdvCellsForEdge
+      real (kind=RKIND), dimension(15,nEdges+1) :: adv_coefs
+      real (kind=RKIND), dimension(15,nEdges+1) :: adv_coefs_3rd
+
+      real (kind=RKIND), dimension(nVertLevels) :: rdzu
+      real (kind=RKIND), dimension(nVertLevels) :: rdzw
+      real (kind=RKIND), dimension(nVertLevels) :: fzm
+      real (kind=RKIND), dimension(nVertLevels) :: fzp
+      real (kind=RKIND), dimension(nVertLevels) :: qv_init
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: t_init
+
+      real (kind=RKIND) :: cf1, cf2, cf3
+      real (kind=RKIND) :: prandtl_inv, r_areaCell, rgas_cprcv
+
+      real (kind=RKIND) :: r_earth
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: ur_cell
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: vr_cell
+
+      real (kind=RKIND), dimension(maxEdges,nCells+1) :: defc_a
+      real (kind=RKIND), dimension(maxEdges,nCells+1) :: defc_b
+
+      real (kind=RKIND), dimension(nVertLevels+1,nCells+1) :: tend_w_pgf
+      real (kind=RKIND), dimension(nVertLevels+1,nCells+1) :: tend_w_buoy
+
+      real (kind=RKIND) :: coef_3rd_order, c_s
+      logical :: config_mix_full
+      character (len=StrKIND) :: config_horiz_mixing
+      real (kind=RKIND) :: config_del4u_div_factor
+      real (kind=RKIND) :: config_h_theta_eddy_visc4
+      real (kind=RKIND) :: config_h_mom_eddy_visc4
+      real (kind=RKIND) :: config_visc4_2dsmag
+      real (kind=RKIND) :: config_len_disp
+      real (kind=RKIND) :: config_h_mom_eddy_visc2, config_v_mom_eddy_visc2, config_h_theta_eddy_visc2, config_v_theta_eddy_visc2
+
+      integer, intent(in) :: rk_step
+      real (kind=RKIND), intent(in) :: dt
+
+      real (kind=RKIND) :: config_mpas_cam_coef
+
+      logical, intent(in) :: config_rayleigh_damp_u
+      real (kind=RKIND), intent(in) :: config_rayleigh_damp_u_timescale_days
+      integer, intent(in) :: config_number_rayleigh_damp_u_levels
+
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: tend_rtheta_adv
+      real (kind=RKIND), dimension(nVertLevels,nCells+1) :: rthdynten
+
+      integer, intent(in) :: cellStart, cellEnd, vertexStart, vertexEnd, edgeStart, edgeEnd
+      integer, intent(in) :: cellSolveStart, cellSolveEnd, vertexSolveStart, vertexSolveEnd, edgeSolveStart, edgeSolveEnd
+
+
+      !
+      ! Local variables
+      !
+      integer :: iEdge, iCell, iVertex, k, cell1, cell2, vertex1, vertex2, eoe, i, j, iq, iAdvCell
+
+      !real (kind=RKIND), parameter :: c_s = 0.125
+      real (kind=RKIND), dimension( nVertLevels+1 ) :: d_diag, d_off_diag, flux_arr
+      real (kind=RKIND), dimension( nVertLevels + 1 ) :: wduz, wdwz, wdtz, dpzx
+      real (kind=RKIND), dimension( nVertLevels ) :: ru_edge_w, q, u_mix
+      real (kind=RKIND) :: theta_turb_flux, w_turb_flux, r
+      real (kind=RKIND) :: scalar_weight
+      real (kind=RKIND) :: inv_r_earth
+
+      real (kind=RKIND) :: invDt, flux, workpv
+      real (kind=RKIND) :: edge_sign, pr_scale, r_dc, r_dv, u_mix_scale
+      real (kind=RKIND) :: h_mom_eddy_visc4, v_mom_eddy_visc2
+      real (kind=RKIND) :: h_theta_eddy_visc4, v_theta_eddy_visc2
+      real (kind=RKIND) :: u_diffusion
+
+      real (kind=RKIND) :: kdiffu, z1, z2, z3, z4, zm, z0, zp, rayleigh_coef_inverse
+
+      real (kind=RKIND), dimension( nVertLevels ) :: rayleigh_damp_coef
+
+      real (kind=RKIND) :: flux3, flux4
+      real (kind=RKIND) :: q_im2, q_im1, q_i, q_ip1, ua, coef3
+
+      flux4(q_im2, q_im1, q_i, q_ip1, ua) =                     &
+                ua*( 7.*(q_i + q_im1) - (q_ip1 + q_im2) )/12.0
+
+      flux3(q_im2, q_im1, q_i, q_ip1, ua, coef3) =              &
+                flux4(q_im2, q_im1, q_i, q_ip1, ua) +           &
+                coef3*abs(ua)*((q_ip1 - q_im2)-3.*(q_i-q_im1))/12.0
+
+
+      prandtl_inv = 1.0_RKIND / prandtl
+      invDt = 1.0_RKIND / dt
+      inv_r_earth = 1.0_RKIND / r_earth
+
+       v_mom_eddy_visc2   = config_v_mom_eddy_visc2
+       v_theta_eddy_visc2 = config_v_theta_eddy_visc2
+
+!$acc data present(kdiff, h_divergence, tend_rho, dpdz, tend_u_euler, tend_u, &
+!$acc              delsq_u, delsq_vorticity, delsq_divergence, tend_w, delsq_w, &
+!$acc              tend_w_euler, tend_theta, tend_theta_euler, delsq_theta, &
+!$acc              tend_rtheta_adv, rthdynten) &
+!$acc      present(nEdgesOnCell, edgesOnCell, edgesOnCell_sign, invAreaCell, &
+!$acc              cellsOnEdge, dcEdge, dvEdge, invDcEdge, invDvEdge, &
+!$acc              nEdgesOnEdge, edgesOnEdge, weightsOnEdge, &
+!$acc              verticesOnEdge, meshScalingDel2, edgesOnVertex, invAreaTriangle, &
+!$acc              edgesOnVertex_sign, meshScalingDel4, nAdvCellsForEdge, advCellsForEdge, &
+!$acc              adv_coefs, adv_coefs_3rd) &
+!$acc      present(u, v, w, ru, rdzw, rw, rb, qtot, rr_save, cqu, pp, zz, zxu, &
+!$acc              pv_edge, rho_edge, ke, divergence, vorticity, u_init, v_init, &
+!$acc              rho_zz, rdzu, cqw, theta_m, ru_save, theta_m_save, rw_save, &
+!$acc              rt_diabatic_tend, t_init) &
+!$acc      present(defc_a, defc_b, fzm, fzp, angleEdge, latEdge, zgrid)
+! !$acc      present(defc_a, defc_b, fzm, fzp, angleEdge, latEdge, zgrid) &
+! !$acc      present(tend_rho_physics, tend_ru_physics, tend_rtheta_physics)
+
+      if (rk_step == 1) then
+
+!         tend_u_euler(1:nVertLevels,edgeStart:edgeEnd) = 0.0
+
+         ! Smagorinsky eddy viscosity, based on horizontal deformation (in this case on model coordinate surfaces).
+         ! The integration coefficients were precomputed and stored in defc_a and defc_b
+
+         if(config_horiz_mixing == "2d_smagorinsky") then
+!$acc parallel
+!$acc loop gang private(d_diag,d_off_diag)
+            do iCell = cellStart,cellEnd
+!$acc loop vector
+               do k = 1,nVertLevels
+                  d_diag(k) = 0.0
+                  d_off_diag(k) = 0.0
+               end do
+!$acc loop seq
+               do iEdge=1,nEdgesOnCell(iCell)
+!$acc loop vector
+                  do k=1,nVertLevels
+                     d_diag(k)     = d_diag(k)     + defc_a(iEdge,iCell)*u(k,EdgesOnCell(iEdge,iCell))  &
+                                                   - defc_b(iEdge,iCell)*v(k,EdgesOnCell(iEdge,iCell))
+                     d_off_diag(k) = d_off_diag(k) + defc_b(iEdge,iCell)*u(k,EdgesOnCell(iEdge,iCell))  &
+                                                   + defc_a(iEdge,iCell)*v(k,EdgesOnCell(iEdge,iCell))
+                  end do
+               end do
+!DIR$ IVDEP
+!$acc loop vector
+               do k=1, nVertLevels
+                  ! here is the Smagorinsky formulation,
+                  ! followed by imposition of an upper bound on the eddy viscosity
+                  kdiff(k,iCell) = min((c_s * config_len_disp)**2 * sqrt(d_diag(k)**2 + d_off_diag(k)**2),(0.01*config_len_disp**2) * invDt)
+               end do
+            end do
+!$acc end parallel
+            h_mom_eddy_visc4   = config_visc4_2dsmag * config_len_disp**3
+            h_theta_eddy_visc4 = h_mom_eddy_visc4
+
+         else if(config_horiz_mixing == "2d_fixed") then
+
+!$acc parallel
+!$acc loop collapse(2)
+            do iCell = cellStart,cellEnd
+               do k = 1,nVertLevels
+                  kdiff(k,iCell) = config_h_theta_eddy_visc2
+               end do
+            end do
+!$acc end parallel
+            h_mom_eddy_visc4 = config_h_mom_eddy_visc4
+            h_theta_eddy_visc4 = config_h_theta_eddy_visc4
+
+         end if
+
+         if (config_mpas_cam_coef > 0.0) then
+
+!$acc parallel
+!$acc loop
+            do iCell = cellStart,cellEnd
+               !
+               ! 2nd-order filter for top absorbing layer as in CAM-SE :  WCS January 2021
+               ! CAM6 SE damping layer coefficients from Peter Lauritzen with config_mpas_cam_coef = 1.0
+               !
+               kdiff(nVertLevels,iCell) = max(kdiff(nVertLevels,iCell), 18.333*config_len_disp*config_mpas_cam_coef)
+               kdiff(nVertLevels-1,iCell) = max(kdiff(nVertLevels-1,iCell), 5.4*config_len_disp*config_mpas_cam_coef)
+               kdiff(nVertLevels-2,iCell) = max(kdiff(nVertLevels-2,iCell), 1.6*config_len_disp*config_mpas_cam_coef)
+            end do
+!$acc end parallel
+
+         end if
+
+      end if
+
+      ! tendency for density.
+      ! accumulate total water here for later use in w tendency calculation.
+
+      ! accumulate horizontal mass-flux
+
+!$acc parallel
+!$acc loop gang
+      do iCell=cellStart,cellEnd
+         r = invAreaCell(iCell)
+!$acc loop vector
+         do k = 1,nVertLevels
+            h_divergence(k,iCell) = 0.0
+         end do
+!$acc loop seq
+         do i=1,nEdgesOnCell(iCell)
+            iEdge = edgesOnCell(i,iCell)
+            edge_sign = edgesOnCell_sign(i,iCell) * dvEdge(iEdge)
+!DIR$ IVDEP
+!$acc loop vector
+            do k=1,nVertLevels
+               h_divergence(k,iCell) = h_divergence(k,iCell) + edge_sign * ru(k,iEdge)
+            end do
+         end do
+
+      ! compute horiontal mass-flux divergence, add vertical mass flux divergence to complete tend_rho
+
+!$acc loop vector
+         do k = 1,nVertLevels
+            h_divergence(k,iCell) = h_divergence(k,iCell) * r
+         end do
+      end do
+!$acc end parallel
+
+      !
+      ! dp / dz and tend_rho
+      !
+      ! only needed on first rk_step with pert variables defined a pert from time t
+      !
+      if(rk_step == 1) then
+
+        rgas_cprcv = rgas*cp/cv
+
+!$acc update host(h_divergence, rdzw, rw)
+        do iCell = cellStart,cellEnd
+          do k = 1,nVertLevels
+            tend_rho(k,iCell) = -h_divergence(k,iCell)-rdzw(k)*(rw(k+1,iCell)-rw(k,iCell)) + tend_rho_physics(k,iCell)
+          end do
+        end do
+!$acc update device(tend_rho)
+
+!$acc parallel
+!$acc loop gang
+        do iCell = cellStart,cellEnd
+
+!DIR$ IVDEP
+!$acc loop vector
+          do k = 1,nVertLevels
+            ! tend_rho(k,iCell) = -h_divergence(k,iCell)-rdzw(k)*(rw(k+1,iCell)-rw(k,iCell)) + tend_rho_physics(k,iCell)
+            dpdz(k,iCell) = -gravity*(rb(k,iCell)*(qtot(k,iCell)) + rr_save(k,iCell)*(1.+qtot(k,iCell)))
+          end do
+        end do
+!$acc end parallel
+      end if
+
+!$OMP BARRIER
+
+      !
+      ! Compute u (normal) velocity tendency for each edge (cell face)
+      !
+
+      if(rk_step == 1) then
+!$acc parallel
+!$acc loop gang
+         do iEdge=edgeSolveStart,edgeSolveEnd
+
+            cell1 = cellsOnEdge(1,iEdge)
+            cell2 = cellsOnEdge(2,iEdge)
+
+            ! horizontal pressure gradient
+
+!DIR$ IVDEP
+!$acc loop vector
+            do k=1,nVertLevels
+               tend_u_euler(k,iEdge) =  - cqu(k,iEdge)*( (pp(k,cell2)-pp(k,cell1))*invDcEdge(iEdge)/(.5*(zz(k,cell2)+zz(k,cell1))) &
+                                              -0.5*zxu(k,iEdge)*(dpdz(k,cell1)+dpdz(k,cell2)) )
+            end do
+         end do
+!$acc end parallel
+      end if
+
+!$acc parallel
+!$acc loop gang private(wduz, q)
+      do iEdge=edgeSolveStart,edgeSolveEnd
+
+         cell1 = cellsOnEdge(1,iEdge)
+         cell2 = cellsOnEdge(2,iEdge)
+
+         ! vertical transport of u
+
+         wduz(1) = 0.
+
+         k = 2
+         wduz(k) =  0.5*( rw(k,cell1)+rw(k,cell2))*(fzm(k)*u(k,iEdge)+fzp(k)*u(k-1,iEdge))
+!$acc loop vector
+         do k=3,nVertLevels-1
+            wduz(k) = flux3( u(k-2,iEdge),u(k-1,iEdge),u(k,iEdge),u(k+1,iEdge),0.5*(rw(k,cell1)+rw(k,cell2)), 1.0_RKIND )
+         end do
+         k = nVertLevels
+         wduz(k) =  0.5*( rw(k,cell1)+rw(k,cell2))*(fzm(k)*u(k,iEdge)+fzp(k)*u(k-1,iEdge))
+
+         wduz(nVertLevels+1) = 0.
+
+!DIR$ IVDEP
+!$acc loop vector
+         do k=1,nVertLevels
+            tend_u(k,iEdge) = - rdzw(k)*(wduz(k+1)-wduz(k)) !  first use of tend_u
+         end do
+
+         ! Next, nonlinear Coriolis term (q) following Ringler et al JCP 2009
+!$acc loop vector
+         do k=1,nVertLevels
+            q(k) = 0.0
+         end do
+!$acc loop seq
+         do j = 1,nEdgesOnEdge(iEdge)
+            eoe = edgesOnEdge(j,iEdge)
+!$acc loop vector
+            do k=1,nVertLevels
+               workpv = 0.5 * (pv_edge(k,iEdge) + pv_edge(k,eoe))
+!  the original definition of pv_edge had a factor of 1/density.  We have removed that factor
+!  given that it was not integral to any conservation property of the system
+               q(k) = q(k) + weightsOnEdge(j,iEdge) * u(k,eoe) * workpv
+            end do
+         end do
+
+!DIR$ IVDEP
+!$acc loop vector
+         do k=1,nVertLevels
+
+            ! horizontal ke gradient and vorticity terms in the vector invariant formulation
+            ! of the horizontal momentum equation
+            tend_u(k,iEdge) = tend_u(k,iEdge) + rho_edge(k,iEdge)* (q(k) - (ke(k,cell2) - ke(k,cell1))       &
+                                                                 * invDcEdge(iEdge))                            &
+                                             - u(k,iEdge)*0.5*(h_divergence(k,cell1)+h_divergence(k,cell2))
+#ifdef CURVATURE
+            ! curvature terms for the sphere
+            tend_u(k,iEdge) = tend_u(k,iEdge) &
+                             - 2.*omega*cos(angleEdge(iEdge))*cos(latEdge(iEdge))  &
+                               *rho_edge(k,iEdge)*.25*(w(k,cell1)+w(k+1,cell1)+w(k,cell2)+w(k+1,cell2))          &
+                             - u(k,iEdge)*.25*(w(k+1,cell1)+w(k,cell1)+w(k,cell2)+w(k+1,cell2))                  &
+                               *rho_edge(k,iEdge) * inv_r_earth
+#endif
+         end do
+
+      end do
+!$acc end parallel
+
+
+      !
+      !  horizontal mixing for u
+      !  mixing terms are integrated using forward-Euler, so this tendency is only computed in the
+      !  first Runge-Kutta substep and saved for use in later RK substeps 2 and 3.
+      !
+
+      if (rk_step == 1) then
+
+!$OMP BARRIER
+
+         ! del^4 horizontal filter.  We compute this as del^2 ( del^2 (u) ).
+         ! First, storage to hold the result from the first del^2 computation.
+
+!$acc parallel
+!$acc loop gang
+         do iEdge=edgeStart,edgeEnd
+!$acc loop vector
+            do k = 1,nVertLevels
+               delsq_u(k,iEdge) = 0.0
+            end do
+
+            cell1 = cellsOnEdge(1,iEdge)
+            cell2 = cellsOnEdge(2,iEdge)
+            vertex1 = verticesOnEdge(1,iEdge)
+            vertex2 = verticesOnEdge(2,iEdge)
+            r_dc = invDcEdge(iEdge)
+            r_dv = min(invDvEdge(iEdge), 4*invDcEdge(iEdge))
+
+!DIR$ IVDEP
+!$acc loop vector
+            do k=1,nVertLevels
+
+               ! Compute diffusion, computed as \nabla divergence - k \times \nabla vorticity
+               !                    only valid for h_mom_eddy_visc4 == constant
+              u_diffusion =   ( divergence(k,cell2)  - divergence(k,cell1) ) * r_dc  &
+                              -( vorticity(k,vertex2) - vorticity(k,vertex1) ) * r_dv
+
+               delsq_u(k,iEdge) = delsq_u(k,iEdge) + u_diffusion
+
+               kdiffu = 0.5*(kdiff(k,cell1)+kdiff(k,cell2))
+
+               ! include 2nd-orer diffusion here
+               tend_u_euler(k,iEdge) = tend_u_euler(k,iEdge) &
+                                       + rho_edge(k,iEdge)* kdiffu * u_diffusion * meshScalingDel2(iEdge)
+
+            end do
+         end do
+!$acc end parallel
+
+         if (h_mom_eddy_visc4 > 0.0) then  ! 4th order mixing is active
+
+!$OMP BARRIER
+
+!$acc parallel
+!$acc loop gang
+            do iVertex=vertexStart,vertexEnd
+!$acc loop vector
+               do k = 1,nVertLevels
+                  delsq_vorticity(k,iVertex) = 0.0
+               end do
+!$acc loop seq
+               do i=1,vertexDegree
+                  iEdge = edgesOnVertex(i,iVertex)
+                  edge_sign = invAreaTriangle(iVertex) * dcEdge(iEdge) * edgesOnVertex_sign(i,iVertex)
+!$acc loop vector
+                  do k=1,nVertLevels
+                     delsq_vorticity(k,iVertex) = delsq_vorticity(k,iVertex) + edge_sign * delsq_u(k,iEdge)
+                  end do
+               end do
+            end do
+!$acc end parallel
+
+!$acc parallel
+!$acc loop gang
+            do iCell=cellStart,cellEnd
+!$acc loop vector
+               do k = 1,nVertLevels
+                  delsq_divergence(k,iCell) = 0.0
+               end do
+               r = invAreaCell(iCell)
+!$acc loop seq
+               do i=1,nEdgesOnCell(iCell)
+                  iEdge = edgesOnCell(i,iCell)
+                  edge_sign = r * dvEdge(iEdge) * edgesOnCell_sign(i,iCell)
+!$acc loop vector
+                  do k=1,nVertLevels
+                     delsq_divergence(k,iCell) = delsq_divergence(k,iCell) + edge_sign * delsq_u(k,iEdge)
+                  end do
+               end do
+            end do
+!$acc end parallel
+
+
+
+
+!$OMP BARRIER
+
+!$acc parallel
+!$acc loop gang
+            do iEdge=edgeSolveStart,edgeSolveEnd
+               cell1 = cellsOnEdge(1,iEdge)
+               cell2 = cellsOnEdge(2,iEdge)
+               vertex1 = verticesOnEdge(1,iEdge)
+               vertex2 = verticesOnEdge(2,iEdge)
+
+               u_mix_scale = meshScalingDel4(iEdge)*h_mom_eddy_visc4
+               r_dc = u_mix_scale * config_del4u_div_factor * invDcEdge(iEdge)
+               r_dv = u_mix_scale * min(invDvEdge(iEdge), 4*invDcEdge(iEdge))
+
+!DIR$ IVDEP
+!$acc loop vector
+               do k=1,nVertLevels
+
+                  ! Compute diffusion, computed as \nabla divergence - k \times \nabla vorticity
+                  !                    only valid for h_mom_eddy_visc4 == constant
+                  !
+                  ! Here, we scale the diffusion on the divergence part a factor of config_del4u_div_factor
+                  !    relative to the rotational part.  The stability constraint on the divergence component is much less
+                  !    stringent than the rotational part, and this flexibility may be useful.
+                  !
+                  u_diffusion =  rho_edge(k,iEdge) *  ( ( delsq_divergence(k,cell2)  - delsq_divergence(k,cell1) ) * r_dc  &
+                                                       -( delsq_vorticity(k,vertex2) - delsq_vorticity(k,vertex1) ) * r_dv )
+                  tend_u_euler(k,iEdge) = tend_u_euler(k,iEdge) - u_diffusion
+
+               end do
+            end do
+!$acc end parallel
+
+         end if ! 4th order mixing is active
+
+      !
+      !  vertical mixing for u - 2nd order filter in physical (z) space
+      !
+         if ( v_mom_eddy_visc2 > 0.0 ) then
+
+            if (config_mix_full) then  ! mix full state
+
+!$acc parallel
+!$acc loop gang
+               do iEdge=edgeSolveStart,edgeSolveEnd
+
+                  cell1 = cellsOnEdge(1,iEdge)
+                  cell2 = cellsOnEdge(2,iEdge)
+
+!$acc loop vector
+                  do k=2,nVertLevels-1
+
+                     z1 = 0.5*(zgrid(k-1,cell1)+zgrid(k-1,cell2))
+                     z2 = 0.5*(zgrid(k  ,cell1)+zgrid(k  ,cell2))
+                     z3 = 0.5*(zgrid(k+1,cell1)+zgrid(k+1,cell2))
+                     z4 = 0.5*(zgrid(k+2,cell1)+zgrid(k+2,cell2))
+
+                     zm = 0.5*(z1+z2)
+                     z0 = 0.5*(z2+z3)
+                     zp = 0.5*(z3+z4)
+
+                     tend_u_euler(k,iEdge) = tend_u_euler(k,iEdge) + rho_edge(k,iEdge) * v_mom_eddy_visc2*(  &
+                                        (u(k+1,iEdge)-u(k  ,iEdge))/(zp-z0)                      &
+                                       -(u(k  ,iEdge)-u(k-1,iEdge))/(z0-zm) )/(0.5*(zp-zm))
+                  end do
+               end do
+!$acc end parallel
+
+            else  ! idealized cases where we mix on the perturbation from the initial 1-D state
+
+!$acc parallel
+!$acc loop gang
+               do iEdge=edgeSolveStart,edgeSolveEnd
+
+                  cell1 = cellsOnEdge(1,iEdge)
+                  cell2 = cellsOnEdge(2,iEdge)
+
+!$acc loop vector
+                  do k=1,nVertLevels
+                     u_mix(k) = u(k,iEdge) - u_init(k) * cos( angleEdge(iEdge) ) &
+                                           - v_init(k) * sin( angleEdge(iEdge) )
+                  end do
+
+!$acc loop vector
+                  do k=2,nVertLevels-1
+
+                     z1 = 0.5*(zgrid(k-1,cell1)+zgrid(k-1,cell2))
+                     z2 = 0.5*(zgrid(k  ,cell1)+zgrid(k  ,cell2))
+                     z3 = 0.5*(zgrid(k+1,cell1)+zgrid(k+1,cell2))
+                     z4 = 0.5*(zgrid(k+2,cell1)+zgrid(k+2,cell2))
+
+                     zm = 0.5*(z1+z2)
+                     z0 = 0.5*(z2+z3)
+                     zp = 0.5*(z3+z4)
+
+                     tend_u_euler(k,iEdge) = tend_u_euler(k,iEdge) + rho_edge(k,iEdge) * v_mom_eddy_visc2*(  &
+                                        (u_mix(k+1)-u_mix(k  ))/(zp-z0)                      &
+                                       -(u_mix(k  )-u_mix(k-1))/(z0-zm) )/(0.5*(zp-zm))
+                  end do
+               end do
+!$acc end parallel
+
+            end if  ! mix perturbation state
+
+         end if  ! vertical mixing of horizontal momentum
+
+      end if ! (rk_step 1 test for computing mixing terms)
+
+!$OMP BARRIER
+
+!  add in mixing and physics tendency for u
+
+!  Rayleigh damping on u
+      if (config_rayleigh_damp_u) then
+         rayleigh_coef_inverse = 1.0 / ( real(config_number_rayleigh_damp_u_levels) &
+                                         * (config_rayleigh_damp_u_timescale_days*seconds_per_day) )
+!$acc kernels
+         do k=nVertLevels-config_number_rayleigh_damp_u_levels+1,nVertLevels
+            rayleigh_damp_coef(k) = real(k - (nVertLevels-config_number_rayleigh_damp_u_levels))*rayleigh_coef_inverse
+         end do
+
+         do iEdge=edgeSolveStart,edgeSolveEnd
+!DIR$ IVDEP
+            do k=nVertlevels-config_number_rayleigh_damp_u_levels+1,nVertLevels
+               tend_u(k,iEdge) = tend_u(k,iEdge) - rho_edge(k,iEdge)*u(k,iEdge)*rayleigh_damp_coef(k)
+            end do
+         end do
+!$acc end kernels
+      end if
+
+! !$acc parallel
+! !$acc loop gang
+!$acc update host(tend_u, tend_u_euler)
+      do iEdge=edgeSolveStart,edgeSolveEnd
+!DIR$ IVDEP
+! !$acc loop vector
+         do k=1,nVertLevels
+!            tend_u(k,iEdge) = tend_u(k,iEdge) + tend_u_euler(k,iEdge)
+            tend_u(k,iEdge) = tend_u(k,iEdge) + tend_u_euler(k,iEdge) + tend_ru_physics(k,iEdge)
+         end do
+      end do
+!$acc update device(tend_u)
+! !$acc end parallel
+
+
+!----------- rhs for w
+
+
+      !
+      !  horizontal advection for w
+      !
+
+!$acc parallel
+!$acc loop gang private(ru_edge_w, flux_arr)
+      do iCell=cellSolveStart,cellSolveEnd    ! Technically updating fewer cells than before...
+!$acc loop vector
+         do k = 1,nVertlevels+1
+            tend_w(k,iCell) = 0.0
+         end do
+!$acc loop seq
+         do i=1,nEdgesOnCell(iCell)
+            iEdge = edgesOnCell(i,iCell)
+            edge_sign = edgesOnCell_sign(i,iCell) * dvEdge(iEdge) * 0.5
+
+!$acc loop vector
+            do k=2,nVertLevels
+               ru_edge_w(k) = fzm(k)*ru(k,iEdge) + fzp(k)*ru(k-1,iEdge)
+            end do
+
+!$acc loop vector
+            do k = 1,nVertLevels
+               flux_arr(k) = 0.0
+            end do
+
+            ! flux_arr stores the value of w at the cell edge used in the horizontal transport
+
+!$acc loop seq
+            do j=1,nAdvCellsForEdge(iEdge)
+               iAdvCell = advCellsForEdge(j,iEdge)
+!$acc loop vector
+               do k=2,nVertLevels
+                  scalar_weight = adv_coefs(j,iEdge) + sign(1.0_RKIND,ru_edge_w(k)) * adv_coefs_3rd(j,iEdge)
+                  flux_arr(k) = flux_arr(k) + scalar_weight * w(k,iAdvCell)
+               end do
+            end do
+
+!DIR$ IVDEP
+!$acc loop vector
+            do k=2,nVertLevels
+               tend_w(k,iCell) = tend_w(k,iCell) - edgesOnCell_sign(i,iCell) * ru_edge_w(k)*flux_arr(k)
+            end do
+         end do
+      end do
+!$acc end parallel
+
+#ifdef CURVATURE
+!$acc parallel
+!$acc loop gang
+      do iCell = cellSolveStart, cellSolveEnd
+!DIR$ IVDEP
+!$acc loop vector
+         do k=2,nVertLevels
+            tend_w(k,iCell) = tend_w(k,iCell) + (rho_zz(k,iCell)*fzm(k)+rho_zz(k-1,iCell)*fzp(k))*          &
+                                      ( (fzm(k)*ur_cell(k,iCell)+fzp(k)*ur_cell(k-1,iCell))**2.             &
+                                       +(fzm(k)*vr_cell(k,iCell)+fzp(k)*vr_cell(k-1,iCell))**2. )/r_earth   &
+                                + 2.*omega*cos(latCell(iCell))                                              &
+                                       *(fzm(k)*ur_cell(k,iCell)+fzp(k)*ur_cell(k-1,iCell))                 &
+                                       *(rho_zz(k,iCell)*fzm(k)+rho_zz(k-1,iCell)*fzp(k))
+
+         end do
+      end do
+!$acc end parallel
+#endif
+
+
+      !
+      !  horizontal mixing for w - we could combine this with advection directly (i.e. as a turbulent flux),
+      !  but here we can also code in hyperdiffusion if we wish (2nd order at present)
+      !
+
+      if (rk_step == 1) then
+
+!  !OMP BARRIER  why is this openmp barrier here???
+
+         ! del^4 horizontal filter.  We compute this as del^2 ( del^2 (u) ).
+         !
+         ! First, storage to hold the result from the first del^2 computation.
+         !  we copied code from the theta mixing, hence the theta* names.
+
+!$acc parallel
+!$acc loop gang
+         do iCell=cellStart,cellEnd
+            r_areaCell = invAreaCell(iCell)
+!$acc loop vector
+            do k = 1,nVertLevels+1
+               delsq_w(k,iCell) = 0.0
+               tend_w_euler(k,iCell) = 0.0
+            end do
+!$acc loop seq
+            do i=1,nEdgesOnCell(iCell)
+               iEdge = edgesOnCell(i,iCell)
+
+               edge_sign = 0.5 * r_areaCell*edgesOnCell_sign(i,iCell) * dvEdge(iEdge) * invDcEdge(iEdge)
+
+               cell1 = cellsOnEdge(1,iEdge)
+               cell2 = cellsOnEdge(2,iEdge)
+
+!DIR$ IVDEP
+!$acc loop vector
+              do k=2,nVertLevels
+
+                  w_turb_flux =  edge_sign*(rho_edge(k,iEdge)+rho_edge(k-1,iEdge))*(w(k,cell2) - w(k,cell1))
+                  delsq_w(k,iCell) = delsq_w(k,iCell) + w_turb_flux
+                  w_turb_flux = w_turb_flux * meshScalingDel2(iEdge) * 0.25 * &
+                                  (kdiff(k,cell1)+kdiff(k,cell2)+kdiff(k-1,cell1)+kdiff(k-1,cell2))
+                  tend_w_euler(k,iCell) = tend_w_euler(k,iCell) + w_turb_flux
+               end do
+            end do
+         end do
+!$acc end parallel
+
+!$OMP BARRIER
+
+         if (h_mom_eddy_visc4 > 0.0) then  ! 4th order mixing is active
+
+!$acc parallel
+!$acc loop gang
+            do iCell=cellSolveStart,cellSolveEnd    ! Technically updating fewer cells than before...
+               r_areaCell = h_mom_eddy_visc4 * invAreaCell(iCell)
+!$acc loop seq
+               do i=1,nEdgesOnCell(iCell)
+                  iEdge = edgesOnCell(i,iCell)
+                  cell1 = cellsOnEdge(1,iEdge)
+                  cell2 = cellsOnEdge(2,iEdge)
+
+                  edge_sign = meshScalingDel4(iEdge)*r_areaCell*dvEdge(iEdge)*edgesOnCell_sign(i,iCell) * invDcEdge(iEdge)
+
+!$acc loop vector
+                  do k=2,nVertLevels
+                     tend_w_euler(k,iCell) = tend_w_euler(k,iCell) - edge_sign * (delsq_w(k,cell2) - delsq_w(k,cell1))
+                  end do
+
+               end do
+            end do
+!$acc end parallel
+
+         end if ! 4th order mixing is active
+
+      end if ! horizontal mixing for w computed in first rk_step
+
+! Note for OpenMP parallelization: We could avoid allocating the delsq_w scratch
+!   array, and just use the delsq_theta array as was previously done; however,
+!   particularly when oversubscribing cores with threads, there is the risk that
+!   some threads may reach code further below that re-uses the delsq_theta array,
+!   in which case we would need a barrier somewhere between here and that code
+!   below to ensure correct behavior.
+
+      !
+      !  vertical advection, pressure gradient and buoyancy for w
+      !
+
+!$acc parallel
+!$acc loop gang private(wdwz)
+      do iCell=cellSolveStart,cellSolveEnd
+
+         wdwz(1) = 0.0
+
+         k = 2
+         wdwz(k) =  0.25*(rw(k,icell)+rw(k-1,iCell))*(w(k,iCell)+w(k-1,iCell))
+!$acc loop vector
+         do k=3,nVertLevels-1
+            wdwz(k) = flux3( w(k-2,iCell),w(k-1,iCell),w(k,iCell),w(k+1,iCell),0.5*(rw(k,iCell)+rw(k-1,iCell)), 1.0_RKIND )
+         end do
+         k = nVertLevels
+         wdwz(k) =  0.25*(rw(k,icell)+rw(k-1,iCell))*(w(k,iCell)+w(k-1,iCell))
+
+         wdwz(nVertLevels+1) = 0.0
+
+      !  Note: next we are also dividing through by the cell area after the horizontal flux divergence
+
+!DIR$ IVDEP
+!$acc loop vector
+         do k=2,nVertLevels
+            tend_w(k,iCell) = tend_w(k,iCell) * invAreaCell(iCell) -rdzu(k)*(wdwz(k+1)-wdwz(k))
+         end do
+      end do
+!$acc end parallel
+
+      if(rk_step == 1) then
+!$acc parallel
+!$acc loop gang
+         do iCell=cellSolveStart,cellSolveEnd
+!DIR$ IVDEP
+!$acc loop vector
+            do k=2,nVertLevels
+              tend_w_euler(k,iCell) = tend_w_euler(k,iCell) - cqw(k,iCell)*(   &
+                                           rdzu(k)*(pp(k,iCell)-pp(k-1,iCell)) &
+                                         - (fzm(k)*dpdz(k,iCell) + fzp(k)*dpdz(k-1,iCell)) )  ! dpdz is the buoyancy term here.
+            end do
+         end do
+!$acc end parallel
+
+         if ( v_mom_eddy_visc2 > 0.0 ) then
+
+!$acc parallel
+!$acc loop gang
+            do iCell=cellSolveStart,cellSolveEnd
+!DIR$ IVDEP
+!$acc loop vector
+               do k=2,nVertLevels
+                  tend_w_euler(k,iCell) = tend_w_euler(k,iCell) + v_mom_eddy_visc2*0.5*(rho_zz(k,iCell)+rho_zz(k-1,iCell))*(  &
+                                           (w(k+1,iCell)-w(k  ,iCell))*rdzw(k)                              &
+                                          -(w(k  ,iCell)-w(k-1,iCell))*rdzw(k-1) )*rdzu(k)
+               end do
+            end do
+!$acc end parallel
+
+         end if
+
+      end if ! mixing term computed first rk_step
+
+      ! add in mixing terms for w
+
+!$acc parallel
+!$acc loop gang
+      do iCell = cellSolveStart,cellSolveEnd
+!DIR$ IVDEP
+!$acc loop vector
+         do k=2,nVertLevels
+            tend_w(k,iCell) = tend_w(k,iCell) + tend_w_euler(k,iCell)
+         end do
+      end do
+!$acc end parallel
+
+!----------- rhs for theta
+
+      !
+      !  horizontal advection for theta
+      !
+
+!$acc parallel
+!$acc loop gang private(flux_arr)
+      do iCell=cellSolveStart,cellSolveEnd    ! Technically updating fewer cells than before...
+!$acc loop vector
+         do k = 1,nVertLevels
+            tend_theta(k,iCell) = 0.0
+         end do
+!$acc loop seq
+         do i=1,nEdgesOnCell(iCell)
+            iEdge = edgesOnCell(i,iCell)
+
+!$acc loop vector
+            do k = 1,nVertLevels
+               flux_arr(k) = 0.0
+            end do
+
+!$acc loop seq
+            do j=1,nAdvCellsForEdge(iEdge)
+               iAdvCell = advCellsForEdge(j,iEdge)
+!$acc loop vector
+               do k=1,nVertLevels
+                  scalar_weight = adv_coefs(j,iEdge) + sign(1.0_RKIND,ru(k,iEdge))*adv_coefs_3rd(j,iEdge)
+                  flux_arr(k) = flux_arr(k) + scalar_weight* theta_m(k,iAdvCell)
+               end do
+            end do
+
+!DIR$ IVDEP
+!$acc loop vector
+            do k=1,nVertLevels
+               tend_theta(k,iCell) = tend_theta(k,iCell) - edgesOnCell_sign(i,iCell) * ru(k,iEdge) * flux_arr(k)
+            end do
+
+         end do
+      end do
+!$acc end parallel
+
+!  addition to pick up perturbation flux for rtheta_pp equation
+
+      if(rk_step > 1) then
+!$acc parallel
+!$acc loop gang
+        do iCell=cellSolveStart,cellSolveEnd
+!$acc loop seq
+          do i=1,nEdgesOnCell(iCell)
+            iEdge = edgesOnCell(i,iCell)
+            cell1 = cellsOnEdge(1,iEdge)
+            cell2 = cellsOnEdge(2,iEdge)
+!DIR$ IVDEP
+!$acc loop vector
+            do k=1,nVertLevels
+               flux = edgesOnCell_sign(i,iCell)*dvEdge(iEdge)*(ru_save(k,iEdge)-ru(k,iEdge))*0.5*(theta_m_save(k,cell2)+theta_m_save(k,cell1))
+               tend_theta(k,iCell) = tend_theta(k,iCell)-flux  ! division by areaCell picked up down below
+            end do
+          end do
+        end do
+!$acc end parallel
+      end if
+
+      !
+      !  horizontal mixing for theta_m - we could combine this with advection directly (i.e. as a turbulent flux),
+      !  but here we can also code in hyperdiffusion if we wish (2nd order at present)
+      !
+
+      if (rk_step == 1) then
+
+
+!$acc parallel
+!$acc loop gang
+         do iCell=cellStart,cellEnd
+!$acc loop vector
+            do k = 1,nVertLevels
+               delsq_theta(k,iCell) = 0.0
+               tend_theta_euler(k,iCell) = 0.0
+            end do
+            r_areaCell = invAreaCell(iCell)
+!$acc loop seq
+            do i=1,nEdgesOnCell(iCell)
+               iEdge = edgesOnCell(i,iCell)
+               edge_sign = r_areaCell*edgesOnCell_sign(i,iCell) * dvEdge(iEdge) * invDcEdge(iEdge)
+               pr_scale = prandtl_inv * meshScalingDel2(iEdge)
+               cell1 = cellsOnEdge(1,iEdge)
+               cell2 = cellsOnEdge(2,iEdge)
+!DIR$ IVDEP
+!$acc loop vector
+               do k=1,nVertLevels
+
+!  we are computing the Smagorinsky filter at more points than needed here so as to pick up the delsq_theta for 4th order filter below
+
+                  theta_turb_flux = edge_sign*(theta_m(k,cell2) - theta_m(k,cell1))*rho_edge(k,iEdge)
+                  delsq_theta(k,iCell) = delsq_theta(k,iCell) + theta_turb_flux
+                  theta_turb_flux = theta_turb_flux*0.5*(kdiff(k,cell1)+kdiff(k,cell2)) * pr_scale
+                  tend_theta_euler(k,iCell) = tend_theta_euler(k,iCell) + theta_turb_flux
+
+               end do
+            end do
+          end do
+!$acc end parallel
+
+!$OMP BARRIER
+
+         if (h_theta_eddy_visc4 > 0.0) then  ! 4th order mixing is active
+
+!$acc parallel
+!$acc loop gang
+            do iCell=cellSolveStart,cellSolveEnd    ! Technically updating fewer cells than before...
+               r_areaCell = h_theta_eddy_visc4 * prandtl_inv * invAreaCell(iCell)
+!$acc loop seq
+               do i=1,nEdgesOnCell(iCell)
+
+                  iEdge = edgesOnCell(i,iCell)
+                  edge_sign = meshScalingDel4(iEdge)*r_areaCell*dvEdge(iEdge)*edgesOnCell_sign(i,iCell)*invDcEdge(iEdge)
+
+                  cell1 = cellsOnEdge(1,iEdge)
+                  cell2 = cellsOnEdge(2,iEdge)
+
+!$acc loop vector
+                  do k=1,nVertLevels
+                     tend_theta_euler(k,iCell) = tend_theta_euler(k,iCell) - edge_sign*(delsq_theta(k,cell2) - delsq_theta(k,cell1))
+                  end do
+               end do
+            end do
+!$acc end parallel
+
+         end if ! 4th order mixing is active
+
+      end if ! theta mixing calculated first rk_step
+
+      !
+      !  vertical advection plus diabatic term
+      !  Note: we are also dividing through by the cell area after the horizontal flux divergence
+      !
+!$acc parallel
+!$acc loop gang private(wdtz)
+      do iCell = cellSolveStart,cellSolveEnd
+
+         wdtz(1) = 0.0
+
+         k = 2
+         wdtz(k) =  rw(k,icell)*(fzm(k)*theta_m(k,iCell)+fzp(k)*theta_m(k-1,iCell))
+         wdtz(k) =  wdtz(k)+(rw_save(k,icell)-rw(k,icell))*(fzm(k)*theta_m_save(k,iCell)+fzp(k)*theta_m_save(k-1,iCell))
+!$acc loop vector
+         do k=3,nVertLevels-1
+            wdtz(k) = flux3( theta_m(k-2,iCell),theta_m(k-1,iCell),theta_m(k,iCell),theta_m(k+1,iCell), rw(k,iCell), coef_3rd_order )
+            wdtz(k) =  wdtz(k) + (rw_save(k,icell)-rw(k,iCell))*(fzm(k)*theta_m_save(k,iCell)+fzp(k)*theta_m_save(k-1,iCell))  ! rtheta_pp redefinition
+         end do
+         k = nVertLevels
+         wdtz(k) =  rw_save(k,icell)*(fzm(k)*theta_m(k,iCell)+fzp(k)*theta_m(k-1,iCell))  ! rtheta_pp redefinition
+
+         wdtz(nVertLevels+1) = 0.0
+
+!DIR$ IVDEP
+!$acc loop vector
+         do k=1,nVertLevels
+            tend_theta(k,iCell) = tend_theta(k,iCell)*invAreaCell(iCell) -rdzw(k)*(wdtz(k+1)-wdtz(k))
+            tend_rtheta_adv(k,iCell) = tend_theta(k,iCell)   !  this is for the Tiedke scheme
+            rthdynten(k,iCell) = tend_theta(k,iCell)/rho_zz(k,iCell)  !  this is for the Grell-Freitas scheme
+            tend_theta(k,iCell) = tend_theta(k,iCell) + rho_zz(k,iCell)*rt_diabatic_tend(k,iCell)
+         end do
+      end do
+!$acc end parallel
+
+      !
+      !  vertical mixing for theta - 2nd order
+      !
+
+      if (rk_step == 1) then
+
+         if ( v_theta_eddy_visc2 > 0.0 ) then  ! vertical mixing for theta_m
+
+            if (config_mix_full) then
+
+!$acc parallel
+!$acc loop gang
+               do iCell = cellSolveStart,cellSolveEnd
+!$acc loop vector
+                  do k=2,nVertLevels-1
+                     z1 = zgrid(k-1,iCell)
+                     z2 = zgrid(k  ,iCell)
+                     z3 = zgrid(k+1,iCell)
+                     z4 = zgrid(k+2,iCell)
+
+                     zm = 0.5*(z1+z2)
+                     z0 = 0.5*(z2+z3)
+                     zp = 0.5*(z3+z4)
+
+                     tend_theta_euler(k,iCell) = tend_theta_euler(k,iCell) + v_theta_eddy_visc2*prandtl_inv*rho_zz(k,iCell)*(&
+                                              (theta_m(k+1,iCell)-theta_m(k  ,iCell))/(zp-z0)                 &
+                                             -(theta_m(k  ,iCell)-theta_m(k-1,iCell))/(z0-zm) )/(0.5*(zp-zm))
+                  end do
+               end do
+!$acc end parallel
+
+         else  ! idealized cases where we mix on the perturbation from the initial 1-D state
+
+!$acc parallel
+!$acc loop gang
+               do iCell = cellSolveStart,cellSolveEnd
+!$acc loop vector
+                  do k=2,nVertLevels-1
+                     z1 = zgrid(k-1,iCell)
+                     z2 = zgrid(k  ,iCell)
+                     z3 = zgrid(k+1,iCell)
+                     z4 = zgrid(k+2,iCell)
+
+                     zm = 0.5*(z1+z2)
+                     z0 = 0.5*(z2+z3)
+                     zp = 0.5*(z3+z4)
+
+                     tend_theta_euler(k,iCell) = tend_theta_euler(k,iCell) + v_theta_eddy_visc2*prandtl_inv*rho_zz(k,iCell)*(&
+                                              ((theta_m(k+1,iCell)-t_init(k+1,iCell))-(theta_m(k  ,iCell)-t_init(k,iCell)))/(zp-z0)      &
+                                             -((theta_m(k  ,iCell)-t_init(k,iCell))-(theta_m(k-1,iCell)-t_init(k-1,iCell)))/(z0-zm) )/(0.5*(zp-zm))
+                  end do
+               end do
+!$acc end parallel
+
+            end if
+
+         end if
+
+      end if ! compute vertical theta mixing on first rk_step
+
+! !$acc parallel
+! !$acc loop gang
+!$acc update host(tend_theta, tend_theta_euler)
+      do iCell = cellSolveStart,cellSolveEnd
+!DIR$ IVDEP
+         do k=1,nVertLevels
+!            tend_theta(k,iCell) = tend_theta(k,iCell) + tend_theta_euler(k,iCell)
+            tend_theta(k,iCell) = tend_theta(k,iCell) + tend_theta_euler(k,iCell) + tend_rtheta_physics(k,iCell)
+         end do
+      end do
+!$acc update device(tend_theta)
+! !$acc end parallel
+
+!$acc end data
+
+   end subroutine atm_compute_dyn_tend_work
+
+
+   subroutine atm_compute_dyn_tend_work_rk1(nCells, nEdges, nVertices, nVertLevels_dummy, &
       nCellsSolve, nEdgesSolve, vertexDegree, maxEdges_dummy, maxEdges2_dummy, num_scalars_dummy, moist_start, moist_end, &
       fEdge, dvEdge, dcEdge, invDcEdge, invDvEdge, invAreaCell, invAreaTriangle, meshScalingDel2, meshScalingDel4, &
       weightsOnEdge, zgrid, rho_edge, rho_zz, ru, u, v, tend_u, &
@@ -5630,14 +6793,14 @@ module atm_time_integration
 !$acc tend_u, delsq_u, delsq_vorticity, delsq_divergence, &
 !$acc tend_w, delsq_w, tend_w_euler, tend_theta, &
 !$acc delsq_theta, tend_theta_euler, &
-!$acc defc_a, defc_b, edgesoncell, nedgesoncell, u, v, &
-!$acc dvedge, edgesoncell_sign, invareacell, ru, qtot, rb, rdzw, rr_save, rw, &
-!$acc cellsonedge, cqu, invdcedge, pp, zxu, zz, &
-!$acc fzm, fzp, edgesonedge, ke, nedgesonedge, pv_edge, rho_edge, weightsonedge, &
-!$acc divergence, invdvedge, meshscalingdel2, verticesonedge, vorticity, &
-!$acc dcedge, edgesonvertex, edgesonvertex_sign, invareatriangle, &
-!$acc meshscalingdel4, zgrid, angleedge, u_init, adv_coefs, &
-!$acc adv_coefs_3rd, advcellsforedge, nadvcellsforedge, w, cqw, rdzu, rho_zz, &
+!$acc defc_a, defc_b, edgesOnCell, nEdgesOnCell, u, v, &
+!$acc dvEdge, edgesOnCell_sign, invAreaCell, ru, qtot, rb, rdzw, rr_save, rw, &
+!$acc cellsOnEdge, cqu, invDcEdge, pp, zxu, zz, &
+!$acc fzm, fzp, edgesOnEdge, ke, nEdgesOnEdge, pv_edge, rho_edge, weightsOnEdge, &
+!$acc divergence, invDvEdge, meshScalingDel2, verticesOnEdge, vorticity, &
+!$acc dcEdge, edgesOnVertex, edgesOnVertex_sign, invAreaTriangle, &
+!$acc meshScalingDel4, zgrid, angleEdge, u_init, adv_coefs, &
+!$acc adv_coefs_3rd, advCellsForEdge, nAdvCellsForEdge, w, cqw, rdzu, rho_zz, &
 !$acc theta_m, theta_m_save, rt_diabatic_tend, t_init, &
 !$acc rw_save,tend_rtheta_adv,rthdynten)
 
@@ -6538,7 +7701,7 @@ if (config_horiz_mixing == "2d_smagorinsky") then
       end do
 !$acc update device(tend_theta)
 !$acc end data
-   end subroutine atm_compute_dyn_tend_work
+   end subroutine atm_compute_dyn_tend_work_rk1
 
       subroutine atm_compute_dyn_tend_work_rk23(nCells, nEdges, nVertices, nVertLevels_dummy, &
       nCellsSolve, nEdgesSolve, vertexDegree, maxEdges_dummy, maxEdges2_dummy, num_scalars_dummy, moist_start, moist_end, &
@@ -9319,6 +10482,11 @@ if (config_horiz_mixing == "2d_smagorinsky") then
        type (domain_type), intent(in) :: domain
        type (block_type), pointer :: block
 
+       logical, pointer :: config_print_global_minmax_vel
+       logical, pointer :: config_print_detailed_minmax_vel
+       logical, pointer :: config_print_global_minmax_sca
+
+
        integer :: iCell, k, iEdge, iScalar
        integer, pointer :: num_scalars, nCellsSolve, nEdgesSolve, nVertLevels
 
@@ -9328,24 +10496,51 @@ if (config_horiz_mixing == "2d_smagorinsky") then
 
 !declare a pointer to the array that needs to be updated on the host
        real (kind=RKIND), dimension(:,:), pointer :: w, u
+       real (kind=RKIND), dimension(:,:), pointer :: v
+       real (kind=RKIND), dimension(:,:,:), pointer :: scalars
 
-         block => domain % blocklist
-         do while (associated(block))
-            call mpas_pool_get_subpool(block % structs, 'state', state)
-            call mpas_pool_get_subpool(block % structs, 'diag', diag)
-            call mpas_pool_get_subpool(block % structs, 'mesh', mesh)
+       call mpas_pool_get_config(domain % blocklist % configs, 'config_print_detailed_minmax_vel', config_print_detailed_minmax_vel)
+       call mpas_pool_get_config(domain % blocklist % configs, 'config_print_global_minmax_sca', config_print_global_minmax_sca)
+
+       block => domain % blocklist
+       do while (associated(block))
+          call mpas_pool_get_subpool(block % structs, 'state', state)
+          call mpas_pool_get_subpool(block % structs, 'diag', diag)
+          call mpas_pool_get_subpool(block % structs, 'mesh', mesh)
 
 !call to mpas pool get array to get the pointer to the array that needs to be
 !updated on the host
-            call mpas_pool_get_array_gpu(state, 'w', w, 2)
-            call mpas_pool_get_array_gpu(state, 'u', u, 2)
+          call mpas_pool_get_array_gpu(state, 'w', w, 2)
+          call mpas_pool_get_array_gpu(state, 'u', u, 2)
 
 !add the variables in the "update host" clause below to update the data on host
-        !$acc update host(w, &
-        !$acc u)
+          !$acc update host(w, &
+          !$acc u)
 
-            block => block % next
-         end do
+          block => block % next
+       end do
+
+       if (config_print_detailed_minmax_vel) then
+          block => domain % blocklist
+          do while (associated(block))
+             call mpas_pool_get_subpool(block % structs, 'diag', diag)
+
+             call mpas_pool_get_array_gpu(diag, 'v', v)
+             !$acc update host(v)
+             block => block % next
+          end do
+       end if
+
+       if (config_print_global_minmax_sca) then
+          block => domain % blocklist
+          do while (associated(block))
+             call mpas_pool_get_subpool(block % structs, 'state', state)
+
+             call mpas_pool_get_array_gpu(state, 'scalars', scalars, 2)
+             !$acc update host(scalars)
+             block => block % next
+          end do
+       end if
 
 
    end subroutine mpas_update_gpu_data_on_host
