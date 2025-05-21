@@ -596,7 +596,7 @@ module atm_time_integration
       call mpas_pool_get_array_gpu(tend_physics, 'tend_ru_physics', tend_ru_physics)
 !      tend_ru_physics(:,nEdges+1) = 0.0_RKIND
 !$acc kernels present(tend_rtheta_physics, tend_rho_physics, tend_ru_physics)
-      do k = 1,nVertLevels+1
+      do k = 1,nVertLevels
          tend_rtheta_physics(k,nCells+1) = 0.0_RKIND
          tend_rho_physics(k,nCells+1) = 0.0_RKIND
          tend_ru_physics(k,nEdges+1) = 0.0_RKIND
@@ -6211,10 +6211,11 @@ module atm_time_integration
          do iCell=cellStart,cellEnd
             r_areaCell = invAreaCell(iCell)
 !$acc loop vector
-            do k = 1,nVertLevels+1
+            do k = 1,nVertLevels
                delsq_w(k,iCell) = 0.0
                tend_w_euler(k,iCell) = 0.0
             end do
+            tend_w_euler(nVertLevels+1,iCell) = 0.0
 !$acc loop seq
             do i=1,nEdgesOnCell(iCell)
                iEdge = edgesOnCell(i,iCell)
